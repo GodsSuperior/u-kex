@@ -52,8 +52,9 @@ KeX has two halves:
 The git history is set up so you can see each change:
 
 ```bash
-git show 3e55df1 --stat     # upstream 3.1.5 scripts, imported verbatim
-git diff 3e55df1 -- bin lib etc   # every Ubuntu change since then
+BASE=$(git log --format=%h --grep='Import upstream kali-win-kex')
+git show $BASE --stat           # upstream 3.1.5 scripts, imported verbatim
+git diff $BASE -- bin lib etc   # every Ubuntu change since then
 ```
 
 ## What had to change for Ubuntu, and why

@@ -1,40 +1,65 @@
 #!/bin/bash
+#
+# Start/stop/status for the xrdp server used by "kex --esm".
+# Runs as root via sudo (see /etc/sudoers.d/u-kex).
+#
+# u-kex changes vs upstream kali-win-kex:
+#  * Ubuntu on WSL usually boots with systemd as PID 1. Upstream only calls the
+#    SysV scripts in /etc/init.d and, on stop, also stops the *system* D-Bus.
+#    Under systemd that would break the whole distro session, so with systemd we
+#    use systemctl and never touch D-Bus (systemd already runs it).
+#  * Status is decided by exit codes instead of grepping for "failed!", which
+#    is a SysV/Debian message format that systemd's output does not use.
+#  * The port rewrite only matches the real "port=3389" line.
 
-function status(){
-    xrdp_stat=$(/etc/init.d/xrdp status)
-    dbus_stat=$(/etc/init.d/dbus status)
-    if [[ "${xrdp_stat}" != *"failed!"* ]] && [[ "${dbus_stat}" != *"failed!"* ]]; then
-        echo "0"
+XRDPINI="/etc/xrdp/xrdp.ini"
+
+has_systemd() {
+    # Canonical check (see sd_booted(3)): this dir exists only if systemd is PID 1
+    [ -d /run/systemd/system ]
+}
+
+status() {
+    if has_systemd; then
+        systemctl is-active --quiet xrdp
     else
-        echo "1"
+        /etc/init.d/xrdp status >/dev/null 2>&1 && /etc/init.d/dbus status >/dev/null 2>&1
     fi
-    return
 }
 
 case "$1" in
     start)
-      if grep -q "port=3389" "/etc/xrdp/xrdp.ini"; then
-          sed -i 's/port=3389/port=3390/g' /etc/xrdp/xrdp.ini
-      fi
-      /etc/init.d/dbus start >/dev/null 2>&1
-      /etc/init.d/xrdp start >/dev/null 2>&1
-      sleep 1
-      status=$(status)
-      exit $status
-      ;;
+        # Windows itself listens on 3389 for RDP; move xrdp out of the way.
+        sed -i 's/^port=3389$/port=3390/' "${XRDPINI}"
+        if has_systemd; then
+            systemctl start xrdp >/dev/null 2>&1
+        else
+            /etc/init.d/dbus start >/dev/null 2>&1
+            /etc/init.d/xrdp start >/dev/null 2>&1
+        fi
+        sleep 1
+        status
+        exit $?
+        ;;
 
     stop)
-      status=$(status)
-      /etc/init.d/xrdp stop >/dev/null 2>&1
-      /etc/init.d/dbus stop >/dev/null 2>&1
-      exit $status
-      ;;
+        if has_systemd; then
+            systemctl stop xrdp xrdp-sesman >/dev/null 2>&1
+        else
+            /etc/init.d/xrdp stop >/dev/null 2>&1
+            /etc/init.d/dbus stop >/dev/null 2>&1
+        fi
+        ! status
+        exit $?
+        ;;
 
     status)
-      status=$(status)
-      exit $status
-      ;;
+        status
+        exit $?
+        ;;
+
     *)
-      exit 1
+        echo "Usage: $0 {start|stop|status}" >&2
+        exit 1
+        ;;
 esac
-exit $?

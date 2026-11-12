@@ -9,6 +9,15 @@ export XDG_SESSION_TYPE=x11
 export GDK_BACKEND=x11
 
 #############################
+## u-kex: per-user override ##
+## Put your own session script in ~/.config/u-kex/xstartup (make it executable)
+## to run a different desktop in window mode without editing this system file.
+## Seamless mode (--sl) still requires XFCE.
+if [ -x "$HOME/.config/u-kex/xstartup" ]; then
+    exec "$HOME/.config/u-kex/xstartup"
+fi
+
+#############################
 ##          Gnome          ##
 #[ -x /etc/vnc/xstartup ] && exec /etc/vnc/xstartup
 #[ -r $HOME/.Xresources ] && xrdb $HOME/.Xresources
@@ -29,4 +38,5 @@ export GDK_BACKEND=x11
 
 ############################
 ##          XFCE          ##
-startxfce4
+## (Ubuntu: provided by the xfce4 package, installed by install.sh)
+exec startxfce4

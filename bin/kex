@@ -869,6 +869,28 @@ case ${cmd} in
     *) check-wsl-interop || exit 1 ;;
 esac
 
+## u-kex: "install.sh --esm-only" installs no Windows programs from Kali (for
+## networks that block gitlab.com/Kali, or PCs that forbid third-party .exe).
+## ESM only needs mstsc.exe/cmdkey.exe, which ship with Windows, so default to
+## it and explain the other modes instead of failing with "command not found".
+if [ ! -x "${VNCCLIENT}" ]; then
+    case ${cmd} in
+        ""|default|start|start-client|wtstart|start-sound)
+            if [ -z "${mode}" ]; then
+                print-verbose "No Windows VNC viewer installed: using Enhanced Session Mode"
+                mode=esm
+            elif [ "${mode}" != "esm" ] || [ "${cmd}" == "start-sound" ]; then
+                printf "\n\t${red}This needs the Windows components from Kali, which are not installed${reset}\n"
+                printf "\t(u-kex was installed with --esm-only).\n"
+                printf "\tUse Remote Desktop mode instead:  kex   or   kex --esm -s\n"
+                printf "\tFor single Linux windows on the Windows desktop, WSLg already does this:\n"
+                printf "\t  just start the app, e.g.  xfce4-terminal &\n\n"
+                exit 1
+            fi
+            ;;
+    esac
+fi
+
 if [ "${SOUND}" == "1" ] && [ ! "${mode}"  == "esm" ] && [ ! "${ARCH}" == "aarch64" ]; then
     stop-sound
     start-sound

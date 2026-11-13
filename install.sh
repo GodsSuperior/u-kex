@@ -10,7 +10,12 @@
 #   4. Installs the Ubuntu-adapted scripts from this repository
 #   5. Configures xrdp for Ubuntu (TLS key access, port 3390, start on demand)
 #
-# Usage: sudo ./install.sh [--no-desktop] [--full-desktop] [--no-sound] [--force]
+# Usage: sudo ./install.sh [--esm-only] [--no-desktop] [--full-desktop] [--no-sound] [--force]
+#
+# --esm-only downloads nothing from Kali: only Ubuntu packages are installed, and
+# KeX runs in Enhanced Session Mode with Windows' built-in Remote Desktop client.
+# Use it where gitlab.com / Kali is blocked (e.g. company networks) or where
+# third-party Windows programs are not allowed.
 #
 # DESTDIR=/some/dir ./install.sh --force   stages files only (no apt, no system
 # changes). Used for testing and packaging.
@@ -29,6 +34,7 @@ WANT_DESKTOP=1
 FULL_DESKTOP=0
 WANT_SOUND=1
 FORCE=0
+ESM_ONLY=0
 
 red='\033[1;31m'; green='\033[1;32m'; yellow='\033[1;33m'; reset='\033[0m'
 info() { printf "${green}[u-kex]${reset} %s\n" "$*"; }
@@ -42,6 +48,7 @@ Options:
   --no-desktop     Do not install XFCE (bring your own; seamless mode needs XFCE)
   --full-desktop   Also install xfce4-goodies (panel plugins, extra apps)
   --no-sound       Do not install the xrdp sound module
+  --esm-only       Only Ubuntu packages, no downloads from Kali (Remote Desktop mode only)
   --force          Skip the Ubuntu / WSL 2 checks
 EOF
 }
@@ -52,6 +59,7 @@ while [ $# -gt 0 ]; do
         --full-desktop) FULL_DESKTOP=1 ;;
         --no-sound)     WANT_SOUND=0 ;;
         --force)        FORCE=1 ;;
+        --esm-only)     ESM_ONLY=1 ;;
         -h|--help)      usage; exit 0 ;;
         *)              usage; die "Unknown option: $1" ;;
     esac
@@ -114,8 +122,9 @@ if [ -z "${DESTDIR}" ]; then
     info "Installing packages (this can take a while)"
     apt-get "${APT_OPTS[@]}" update -qq
 
-    PKGS=(tigervnc-standalone-server tigervnc-tools xrdp ssl-cert dbus-x11
-          xauth x11-xserver-utils git ca-certificates)
+    PKGS=(xrdp ssl-cert dbus-x11 xauth x11-xserver-utils ca-certificates)
+    # Window mode (VNC) and the upstream download are not used with --esm-only
+    [ "${ESM_ONLY}" = 1 ] || PKGS+=(tigervnc-standalone-server tigervnc-tools git)
 
     if [ "${WANT_DESKTOP}" = 1 ]; then
         # --no-install-recommends matters: xfce4 *recommends* LightDM and a full
@@ -141,22 +150,31 @@ if [ -z "${DESTDIR}" ]; then
 fi
 
 # --------------------------------------------- 3. Windows side from upstream --
-command -v git >/dev/null || die "git is required"
-WORK="$(mktemp -d)"
-trap 'rm -rf "${WORK}"' EXIT
+if [ "${ESM_ONLY}" = 0 ]; then
+    command -v git >/dev/null || die "git is required"
+    WORK="$(mktemp -d)"
+    trap 'rm -rf "${WORK}"' EXIT
 
-info "Fetching Windows components from ${UPSTREAM_URL} (${UPSTREAM_TAG})"
-# Sparse + blobless clone: only downloads the files under usr/lib/win-kex.
-git -c advice.detachedHead=false clone -q --depth 1 --branch "${UPSTREAM_TAG}" \
-    --filter=blob:none --sparse "${UPSTREAM_URL}" "${WORK}/upstream"
-git -C "${WORK}/upstream" sparse-checkout set usr/lib/win-kex
+    info "Fetching Windows components from ${UPSTREAM_URL} (${UPSTREAM_TAG})"
+    # Sparse + blobless clone: only downloads the files under usr/lib/win-kex.
+    if ! git -c advice.detachedHead=false clone -q --depth 1 --branch "${UPSTREAM_TAG}" \
+            --filter=blob:none --sparse "${UPSTREAM_URL}" "${WORK}/upstream"; then
+        die "Could not download from ${UPSTREAM_URL}.
+       If your network blocks it (common on company PCs), re-run with:
+         sudo $0 --esm-only
+       That installs only Ubuntu packages and uses Windows' built-in Remote Desktop."
+    fi
+    git -C "${WORK}/upstream" sparse-checkout set usr/lib/win-kex
 
-# A tag can be moved; a commit hash cannot. Refuse anything but the reviewed one.
-GOT="$(git -C "${WORK}/upstream" rev-parse HEAD)"
-[ "${GOT}" = "${UPSTREAM_COMMIT}" ] || die "Upstream commit mismatch: expected ${UPSTREAM_COMMIT}, got ${GOT}"
-info "Verified upstream commit ${GOT}"
+    # A tag can be moved; a commit hash cannot. Refuse anything but the reviewed one.
+    GOT="$(git -C "${WORK}/upstream" rev-parse HEAD)"
+    [ "${GOT}" = "${UPSTREAM_COMMIT}" ] || die "Upstream commit mismatch: expected ${UPSTREAM_COMMIT}, got ${GOT}"
+    info "Verified upstream commit ${GOT}"
 
-UP="${WORK}/upstream/usr/lib/win-kex"
+    UP="${WORK}/upstream/usr/lib/win-kex"
+else
+    info "--esm-only: skipping the Windows components from Kali"
+fi
 
 # ------------------------------------------------------------- 4. install --
 info "Installing to ${DESTDIR:-/}"
@@ -167,9 +185,10 @@ install -d "${DESTDIR}/usr/bin" "${LIBDIR}/xrdp" "${LIBDIR}/wslg-sock" \
 # to launch .exe files from the Linux filesystem)
 for d in TigerVNC VcXsrv pulse; do
     rm -rf "${LIBDIR:?}/${d}"
-    cp -a "${UP}/${d}" "${LIBDIR}/${d}"
+    [ "${ESM_ONLY}" = 1 ] || cp -a "${UP}/${d}" "${LIBDIR}/${d}"
 done
-install -m 0644 "${UP}/xrdp/win-kex.rdp" "${LIBDIR}/xrdp/win-kex.rdp"   # UTF-16 RDP profile
+# RDP client profile for mstsc.exe (UTF-16 text, verbatim from upstream 3.1.5)
+install -m 0644 "${SRC_DIR}/lib/win-kex/xrdp/win-kex.rdp" "${LIBDIR}/xrdp/win-kex.rdp"
 
 # Ubuntu-adapted scripts from this repo
 install -m 0755 "${SRC_DIR}/bin/kex"                        "${DESTDIR}/usr/bin/kex"
@@ -204,6 +223,23 @@ if [ -z "${DESTDIR}" ]; then
 fi
 
 info "Done."
+if [ "${ESM_ONLY}" = 1 ]; then
+cat <<EOF
+
+  Start the desktop:   kex                (Remote Desktop / Enhanced Session Mode)
+  With sound:          kex -s
+  Help:                kex --help
+
+  Installed with --esm-only: window mode (VNC) and KeX's seamless mode need the
+  Windows components from Kali and are not available. For single Linux windows
+  on your Windows desktop, WSLg (built into current WSL) already does this:
+  just start an app, e.g.  xfce4-terminal &
+
+  The first 'kex' asks for your *Linux* password, which Windows stores for the
+  Remote Desktop login (cmdkey).
+
+EOF
+else
 cat <<EOF
 
   Start the desktop:   kex                (window mode, VNC)
@@ -212,8 +248,9 @@ cat <<EOF
   Add sound:           kex -s   /   kex --esm -s
   Help:                kex --help
 
-  The first 'kex' asks you for a VNC password (6-8 chars is what VNC uses).
+  The first 'kex' asks you for a VNC password (VNC only uses the first 8 characters).
   You may need to log out and back in (or 'wsl --shutdown') for the
   XAUTHORITY setting in /etc/profile.d/win-kex.sh to apply.
 
 EOF
+fi

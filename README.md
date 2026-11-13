@@ -27,11 +27,30 @@ The first time you run `kex`, it asks for a VNC password. VNC only uses the firs
 
 Installer options:
 
+- `--esm-only` installs only Ubuntu packages and downloads nothing from Kali (see below).
+
 - `--full-desktop` also installs xfce4-goodies.
 - `--no-desktop` skips XFCE (bring your own desktop).
 - `--no-sound` skips the sound module.
 
 To remove u-kex, run `sudo ./uninstall.sh`.
+
+### Company PCs, or wherever gitlab.com / Kali is blocked
+
+```bash
+sudo ./install.sh --esm-only
+kex            # opens the desktop in Windows' own Remote Desktop client
+kex -s         # same, with sound
+```
+
+`--esm-only` downloads **nothing** from Kali and installs **no** third-party Windows programs. Everything comes from Ubuntu's own package mirrors. On the Windows side, it only uses `mstsc.exe` and `cmdkey.exe`, which ship with Windows. The whole install is about 100 KB plus Ubuntu packages.
+
+What you give up:
+
+- **Window mode (VNC).** Remote Desktop mode gives the same full desktop.
+- **KeX's seamless mode.** Current WSL already has this built in as **WSLg**: start any Linux GUI app (`xfce4-terminal &`) and it opens as a normal Windows window. WSLg sound works the same way.
+
+Two things your IT policy may still control: whether WSL itself is allowed, and whether Remote Desktop (`mstsc`) to `localhost` is allowed.
 
 ## How it's built
 
@@ -102,6 +121,7 @@ Then run `wsl --shutdown` in Windows and reopen Ubuntu.
 | VNC server + XFCE desktop started by u-kex's `xstartup`, the way `kex` starts it | Tested (desktop renders) |
 | `xrdpservice` start/stop/status on a non-systemd system; xrdp listening on 3390 | Tested |
 | `vnc-passwd-file` on TigerVNC 1.13 | Tested |
+| `--esm-only` with gitlab.com unreachable: install succeeds, `kex` falls back to ESM and only calls `cmdkey.exe`/`mstsc.exe` (Windows simulated by logging stubs) | Tested |
 | Windows side: viewer, mstsc, VcXsrv, sound, systemd branch of `xrdpservice` | **Needs a real Windows + WSL 2 machine.** It wasn't available while building this. |
 
 ## License

@@ -97,19 +97,51 @@ pkg_available() { [ -n "$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ 
 # A freshly started Ubuntu runs "unattended-upgrades" in the background for a
 # few minutes, and it holds the dpkg lock while it works. Wait for it instead
 # of failing. (Never delete the lock files: that is how dpkg databases break.)
-wait_for_apt() {
-    local waited=0 max=900
-    # pgrep matches the 15-char kernel process name, hence "unattended-upgr"
-    while pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null; do
-        if [ "${waited}" -eq 0 ]; then
-            info "Another package manager is running (often Ubuntu's automatic updates after start-up)."
-            info "Waiting for it to finish, up to $((max / 60)) minutes..."
+#
+# We look at the *locks*, not at process names: Ubuntu permanently runs a
+# helper, unattended-upgrade-shutdown, whose name the kernel truncates to
+# "unattended-upgr" - the same as the real updater - but it holds no lock.
+# Matching on names made the installer wait forever on every systemd Ubuntu.
+#
+# The kernel lists every held file lock in /proc/locks, e.g.
+#   1: POSIX  ADVISORY  WRITE 534 fe:00:4963 0 EOF
+# where 534 is the holder's PID and fe:00:4963 is device (major:minor, hex)
+# and inode of the locked file.
+APT_LOCKS=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+           /var/lib/apt/lists/lock /var/cache/apt/archives/lock)
+
+# Prints "PID (name)" of the process holding an apt/dpkg lock; nothing if free.
+apt_lock_holder() {
+    local f dev ino id pid
+    for f in "${APT_LOCKS[@]}"; do
+        [ -e "${f}" ] || continue
+        dev=$(stat -c %d "${f}")
+        ino=$(stat -c %i "${f}")
+        # Decode the kernel's device number into major:minor as /proc/locks prints it
+        id=$(printf '%02x:%02x:%s' $(( (dev >> 8) & 0xfff )) \
+             $(( (dev & 0xff) | ((dev >> 12) & 0xfff00) )) "${ino}")
+        # The PID is the field right before the id (blocked waiters add a "->"
+        # column, so do not rely on a fixed column number)
+        pid=$(awk -v id="${id}" '{for (i = 2; i <= NF; i++) if ($i == id) {print $(i-1); exit}}' /proc/locks)
+        if [ -n "${pid}" ]; then
+            echo "${pid} ($(cat "/proc/${pid}/comm" 2>/dev/null || echo unknown))"
+            return
         fi
-        [ "${waited}" -ge "${max}" ] && die "Still busy after $((max / 60)) minutes. Try again later, or see: ps -ef | grep -E 'apt|dpkg|unattended'"
+    done
+}
+
+wait_for_apt() {
+    local waited=0 max=900 holder
+    while holder=$(apt_lock_holder) && [ -n "${holder}" ]; do
+        if [ "${waited}" -eq 0 ]; then
+            info "The package database is locked by process ${holder}."
+            info "Usually that is Ubuntu's automatic updates after start-up. Waiting up to $((max / 60)) minutes..."
+        fi
+        [ "${waited}" -ge "${max}" ] && die "Still locked by ${holder} after $((max / 60)) minutes. See: ps -fp ${holder%% *}"
         sleep 5
         waited=$((waited + 5))
     done
-    [ "${waited}" -gt 0 ] && info "Package manager is free after ${waited}s"
+    [ "${waited}" -gt 0 ] && info "Package database is free after ${waited}s"
     return 0
 }
 

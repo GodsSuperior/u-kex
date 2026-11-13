@@ -98,7 +98,7 @@ Two upstream bugs (present on Kali too) are also fixed here:
 
 ## Troubleshooting
 
-**"Could not get lock /var/lib/dpkg/lock-frontend … (unattended-upgr)"**: right after Ubuntu starts, its automatic updates run in the background and hold the package lock. `install.sh` now waits for them (up to 15 minutes). Don't delete the lock file to get around this. That can corrupt the package database.
+**"Could not get lock /var/lib/dpkg/lock-frontend … (unattended-upgr)"**: right after Ubuntu starts, its automatic updates run in the background and hold the package lock. `install.sh` now waits for them (up to 15 minutes). It looks at who actually holds the lock in `/proc/locks`, not at process names, because Ubuntu always runs a helper that is also named `unattended-upgr` but holds no lock. Don't delete the lock file to get around this. That can corrupt the package database.
 
 **"Cannot run Windows programs from WSL"**: this is fix #8. Run:
 

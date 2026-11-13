@@ -86,9 +86,33 @@ esac
 # -------------------------------------------------------------- 2. packages --
 pkg_available() { [ -n "$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ && $2 != "(none)" {print $2}')" ]; }
 
+# A freshly started Ubuntu runs "unattended-upgrades" in the background for a
+# few minutes, and it holds the dpkg lock while it works. Wait for it instead
+# of failing. (Never delete the lock files: that is how dpkg databases break.)
+wait_for_apt() {
+    local waited=0 max=900
+    # pgrep matches the 15-char kernel process name, hence "unattended-upgr"
+    while pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null; do
+        if [ "${waited}" -eq 0 ]; then
+            info "Another package manager is running (often Ubuntu's automatic updates after start-up)."
+            info "Waiting for it to finish, up to $((max / 60)) minutes..."
+        fi
+        [ "${waited}" -ge "${max}" ] && die "Still busy after $((max / 60)) minutes. Try again later, or see: ps -ef | grep -E 'apt|dpkg|unattended'"
+        sleep 5
+        waited=$((waited + 5))
+    done
+    [ "${waited}" -gt 0 ] && info "Package manager is free after ${waited}s"
+    return 0
+}
+
+# Second line of defence: if something grabs the lock between our check and
+# our apt-get call, apt itself waits up to 10 minutes (apt >= 1.9.11, Ubuntu 20.04+).
+APT_OPTS=(-o DPkg::Lock::Timeout=600)
+
 if [ -z "${DESTDIR}" ]; then
+    wait_for_apt
     info "Installing packages (this can take a while)"
-    apt-get update -qq
+    apt-get "${APT_OPTS[@]}" update -qq
 
     PKGS=(tigervnc-standalone-server tigervnc-tools xrdp ssl-cert dbus-x11
           xauth x11-xserver-utils git ca-certificates)
@@ -113,7 +137,7 @@ if [ -z "${DESTDIR}" ]; then
         fi
     fi
 
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${PKGS[@]}"
+    DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTS[@]}" install -y --no-install-recommends "${PKGS[@]}"
 fi
 
 # --------------------------------------------- 3. Windows side from upstream --
